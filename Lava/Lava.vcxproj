@@ -24,10 +24,12 @@
   <ItemGroup>
     <ClCompile Include="lava.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="vk_mem_alloc.cpp" />
     <ClCompile Include="vulkanBase.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="lava.h" />
+    <ClInclude Include="vk_mem_alloc.h" />
     <ClInclude Include="vulkanBase.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
