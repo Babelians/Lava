@@ -28,9 +28,16 @@ void VulkanBase::initialize(GLFWwindow* window, const char* appTitle)
 	createInstance(appTitle);
 	selectPhysicalDevices();
 	createDevice();
+	createMemoryAllocator();
 	createStagingBuffer();
+	createDeviceLocalBuffer();
 	createCommandPool();
 	createCommandBuffer();
+	createFence();
+	shaderModule = createShaderModule("../Lava/SPIR-V/add.comp.spv");
+	createDescriptorPool();
+	createDescriptorSetLayout();
+	createDescriptorSet();
 	errorLog();
 }
 
@@ -176,8 +183,7 @@ void VulkanBase::createDevice()
 	}
 }
 
-//CPUからもGPUからも見えるメインメモリ。CPUからコピーされたデータをGPUがGPUのVRAMにコピーする。
-void VulkanBase::createStagingBuffer()
+void VulkanBase::createMemoryAllocator()
 {
 	//アロケータを作る
 	VmaAllocatorCreateInfo allocatorCI{};
@@ -188,10 +194,15 @@ void VulkanBase::createStagingBuffer()
 	{
 		errors.push_back("vmaCreateAllocator failled in createStagingBuffer");
 	}
+}
+
+//CPUからもGPUからも見えるメインメモリ。CPUからコピーされたデータをGPUがGPUのVRAMにコピーする。
+void VulkanBase::createStagingBuffer()
+{
 	//ステージングバッファを作る
 	VmaAllocationCreateInfo stagingBufferAllocInfo{};
 	stagingBufferAllocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU; //CPUとGPUが見れるメモリで、GPUが高速に処理できるもの。
-	VkBufferCreateInfo bufferCI;
+	VkBufferCreateInfo bufferCI{};
 	bufferCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 	bufferCI.pNext = nullptr;
 	bufferCI.flags = 0;
@@ -203,6 +214,27 @@ void VulkanBase::createStagingBuffer()
 	if (vmaCreateBuffer(allocator, &bufferCI, &stagingBufferAllocInfo, &stagingBuffer, &stagingBufferAllocation, nullptr) != VK_SUCCESS)
 	{
 		errors.push_back("vmaCreateBuffer failled in createStagingBuffer");
+	}
+}
+
+//GPUからのみ見えるメインメモリ。CPUからコピーされたデータをGPUがGPUのVRAMにコピーする。
+void VulkanBase::createDeviceLocalBuffer()
+{
+	//デバイスローカルバッファを作る
+	VmaAllocationCreateInfo deviceLocalBufferAllocInfo{};
+	deviceLocalBufferAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY; //CPUとGPUが見れるメモリで、GPUが高速に処理できるもの。
+	VkBufferCreateInfo bufferCI{};
+	bufferCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferCI.pNext = nullptr;
+	bufferCI.flags = 0;
+	bufferCI.size = 1024u;
+	bufferCI.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT || VK_BUFFER_USAGE_TRANSFER_DST_BIT || VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+	bufferCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	bufferCI.queueFamilyIndexCount = 0;
+	bufferCI.pQueueFamilyIndices = nullptr;
+	if (vmaCreateBuffer(allocator, &bufferCI, &deviceLocalBufferAllocInfo, &deviceLocalBuffer, &deviceLocalBufferAllocation, nullptr) != VK_SUCCESS)
+	{
+		errors.push_back("vmaCreateBuffer failled in createDeviceLocalBuffer");
 	}
 }
 
@@ -234,77 +266,162 @@ void VulkanBase::createCommandBuffer()
 	}
 }
 
-/*void VulkanBase::createStagingBuffer()
+void VulkanBase::copyBuffer()
 {
-	//ステージングバッファ
-	VkBuffer hostBuffer;
-	VkBufferCreateInfo hostBufferCI{};
-	hostBufferCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	hostBufferCI.pNext = nullptr;
-	hostBufferCI.flags = 0;
-	hostBufferCI.size = 1000;
-	hostBufferCI.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT || VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-	hostBufferCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	hostBufferCI.queueFamilyIndexCount = 0;
-	hostBufferCI.pQueueFamilyIndices = nullptr;
-	if (vkCreateBuffer(device, &hostBufferCI, nullptr, &hostBuffer) != VK_SUCCESS)
+	VkCommandBufferBeginInfo commandBufferBeginInfo{};
+	commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	commandBufferBeginInfo.pNext = nullptr;
+	commandBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	commandBufferBeginInfo.pInheritanceInfo = VK_NULL_HANDLE;
+	if (vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo) != VK_SUCCESS)
 	{
-		errors.push_back("Create stagingBuffer failed");
-		errorLog();
+		errors.push_back("vkBeginCommandBuffer is failed in recordCommand");
 	}
+	VkBufferCopy region{};
+	region.srcOffset = 0u;
+	region.dstOffset = 0u;
+	region.size = 1000u;
+	vkCmdCopyBuffer(commandBuffer, stagingBuffer, deviceLocalBuffer, 1u, &region);
+	vkEndCommandBuffer(commandBuffer);
+}
 
-	//バッファに必要なメモリ要件を調べる
-	VkMemoryRequirements hostBufferMemoryReqs;
-	vkGetBufferMemoryRequirements(device, hostBuffer, &hostBufferMemoryReqs);
-
-	//GPUで使えるメインメモリー要件を取得
-	VkPhysicalDeviceMemoryProperties pMemoryProps;
-	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &pMemoryProps);
-
-	//GPUがアクセスするのに適したヒープインデックス(デバイスローカルメモリ)を探す。
-	uint32_t hostHeapIndex = 0u;
-	for (uint32_t i = 0; i < pMemoryProps.memoryHeapCount; i++)
+void VulkanBase::createFence()
+{
+	VkFenceCreateInfo fenceCI{};
+	fenceCI.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	fenceCI.pNext = nullptr;
+	fenceCI.flags = 0u;
+	if (vkCreateFence(device, &fenceCI, nullptr, &fence) != VK_SUCCESS)
 	{
-		if (pMemoryProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-		{
-			hostHeapIndex = i;
-			break;
-		}
+		errors.push_back("vkCreateFence is failed");
 	}
+}
 
-	//上のヒープインデックスがステージングバッファとして使えるか確認する
-	uint32_t hostMemoryIndex = 0u;
-	for (uint32_t i = 0; i < pMemoryProps.memoryTypeCount; i++)
+void VulkanBase::flowQueue(VkQueue queue)
+{
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.pNext = nullptr;
+	submitInfo.waitSemaphoreCount = 0u;
+	submitInfo.pWaitSemaphores = nullptr;
+	submitInfo.pWaitDstStageMask = nullptr;
+	submitInfo.commandBufferCount = 1u;
+	submitInfo.pCommandBuffers = &commandBuffer;
+	submitInfo.signalSemaphoreCount = 0u;
+	submitInfo.pSignalSemaphores = nullptr;
+	if (vkQueueSubmit(queue, 1u, &submitInfo, fence))
 	{
-		if (pMemoryProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT  //この振る舞いをするメモリが
-			&& (hostBufferMemoryReqs.memoryTypeBits >> i) & 0x1 //i番目のメモリに置けるとき
-			&& pMemoryProps.memoryTypes[i].heapIndex == hostHeapIndex) //ステージングバッファとして使えるとき
-		{
-			hostMemoryIndex = i;
-			break;
-		}
+		errors.push_back("vkQueueSubmit is failed");
 	}
+}
 
-	//ステージングバッファをつくる
-	VkMemoryAllocateInfo hostMemoryAI{};
-	hostMemoryAI.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-	hostMemoryAI.pNext = nullptr;
-	hostMemoryAI.allocationSize = hostBufferMemoryReqs.size;
-	hostMemoryAI.memoryTypeIndex = hostMemoryIndex;
-	VkDeviceMemory hostMemory;
-	if (vkAllocateMemory(device, &hostMemoryAI, nullptr, &hostMemory) != VK_SUCCESS)
+VkShaderModule VulkanBase::createShaderModule(const char* fileName)
+{
+	fstream file(fileName, ios::in | ios::binary);
+	if (!file.good())
 	{
-		errors.push_back("vkAllocateMemory for hostMemory is failled");
-		errorLog();
+		errors.push_back("opening spv file is failed in createShaderModule");
 	}
+	vector<uint8_t>code;
+	code.assign(
+		istreambuf_iterator<char>(file),
+		istreambuf_iterator<char>()
+	);
+	VkShaderModuleCreateInfo shaderModuleCI{};
+	shaderModuleCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+	shaderModuleCI.pNext = nullptr;
+	shaderModuleCI.flags = 0u;
+	shaderModuleCI.codeSize = code.size();
+	shaderModuleCI.pCode = reinterpret_cast<const uint32_t*>(code.data());
+	VkShaderModule shaderModule;
+	if (vkCreateShaderModule(device, &shaderModuleCI, nullptr, &shaderModule) != VK_SUCCESS)
+	{
+		errors.push_back("vkCreateShaderModule is failed in createShaderModule");
+	}
+	return shaderModule;
+}
 
-	//メモリをステージングバッファ用のメモリに結びつける
-	if (vkBindBufferMemory(device, hostBuffer, hostMemory, 0u) != VK_SUCCESS)
+void VulkanBase::createDescriptorPool()
+{
+	VkDescriptorPoolSize descriptorPoolSize{};
+	descriptorPoolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	descriptorPoolSize.descriptorCount = 5u;
+
+	VkDescriptorPoolCreateInfo descriptorPoolCI{};
+	descriptorPoolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	descriptorPoolCI.pNext = nullptr;
+	descriptorPoolCI.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+	descriptorPoolCI.maxSets = 10u;
+	descriptorPoolCI.poolSizeCount = 1u;
+	descriptorPoolCI.pPoolSizes = &descriptorPoolSize;
+	if (vkCreateDescriptorPool(device, &descriptorPoolCI, nullptr, &descriptorPool) != VK_SUCCESS)
 	{
-		errors.push_back("vkBindingMemory for hostMemory and hostBuffer is failled");
-		errorLog();
+		errors.push_back("vkCreateDescriptorPool is failed in createDescriptorPool");
 	}
-}*/
+}
+
+void VulkanBase::createDescriptorSetLayout()
+{
+	//必要なデスクリプタを指定
+	VkDescriptorSetLayoutBinding descriptorSetLayoutBinding{};
+	//binding=0に結び付ける
+	descriptorSetLayoutBinding.binding = 0;
+	descriptorSetLayoutBinding.descriptorCount = 1u;
+	descriptorSetLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	descriptorSetLayoutBinding.pImmutableSamplers = nullptr;
+	descriptorSetLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+	//デスクリプタセットレイアウトを作る
+	VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCI{};
+	descriptorSetLayoutCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	descriptorSetLayoutCI.flags = 0u;
+	descriptorSetLayoutCI.pNext = nullptr;
+	descriptorSetLayoutCI.bindingCount = 1u;
+	descriptorSetLayoutCI.pBindings = &descriptorSetLayoutBinding;
+	if (vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayout) != VK_SUCCESS)
+	{
+		errors.push_back("vkCreateDescriptorSetLayout is failed in createDescriptorSetLayout");
+	}
+}
+
+void VulkanBase::createDescriptorSet()
+{
+	VkDescriptorSetAllocateInfo descriptorSetAllocInfo{};
+	descriptorSetAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	descriptorSetAllocInfo.pNext = nullptr;
+	descriptorSetAllocInfo.descriptorPool = descriptorPool;
+	descriptorSetAllocInfo.descriptorSetCount = 1u;
+	descriptorSetAllocInfo.pSetLayouts = &descriptorSetLayout;
+	if (vkAllocateDescriptorSets(device, &descriptorSetAllocInfo, &descriptorSet) != VK_SUCCESS)
+	{
+		errors.push_back("vkAllocateDescriptorSets is failled in createDescriptorSet");
+	}
+	//作成したデスクリプタセットはデスクリプタセットレイアウトが同じなら使いまわせる。
+}
+
+void VulkanBase::updateDescriptorSet()
+{
+	//更新するデスクリプタの内容
+	VkDescriptorBufferInfo descriptorBufferInfo{};
+	descriptorBufferInfo.buffer = deviceLocalBuffer;
+	descriptorBufferInfo.offset = 0u;
+	descriptorBufferInfo.range = 1024u;
+
+	//デスクリプタの内容を更新
+	VkWriteDescriptorSet writeDescriptorSet{};
+	writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writeDescriptorSet.pNext = nullptr;
+	writeDescriptorSet.dstSet = descriptorSet; //このデスクリプタセットの
+	writeDescriptorSet.dstBinding = 0u; //binding=0の
+	writeDescriptorSet.dstArrayElement = 0u; //0番目の
+	writeDescriptorSet.descriptorCount = 1u; //1個の
+	writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; //ストレージバッファのデスクリプタを
+	writeDescriptorSet.pImageInfo = nullptr;
+	writeDescriptorSet.pBufferInfo = &descriptorBufferInfo;
+	writeDescriptorSet.pTexelBufferView = nullptr;
+
+	vkUpdateDescriptorSets(device, 1u, &writeDescriptorSet, 0u, nullptr);
+}
 
 void VulkanBase::terminate()
 {

@@ -9,6 +9,8 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 #include <vector>
+#include <fstream>
+#include <iostream>
 #include "vk_mem_alloc.h"
 
 #pragma comment(lib, "vulkan-1.lib")
@@ -31,14 +33,31 @@ protected:
 	uint32_t queueFamilyIndex;
 	VmaAllocator allocator;
 	VkBuffer stagingBuffer;
+	VkBuffer deviceLocalBuffer;
 	VmaAllocation stagingBufferAllocation;
+	VmaAllocation deviceLocalBufferAllocation;
 	VkCommandPool commandPool;
 	VkCommandBuffer commandBuffer;
+	VkFence fence;
+	VkShaderModule shaderModule;
+	VkDescriptorPool descriptorPool;
+	VkDescriptorSetLayout descriptorSetLayout;
+	VkDescriptorSet descriptorSet;
 	void createInstance(const char* appTitle);
 	void selectPhysicalDevices();
 	void createDevice();
+	void createMemoryAllocator();
 	void createStagingBuffer();
+	void createDeviceLocalBuffer();
 	void createCommandPool();
 	void createCommandBuffer();
+	void copyBuffer();
+	void createFence();
+	void flowQueue(VkQueue queue);
+	void createDescriptorPool();
+	void createDescriptorSetLayout();
+	void createDescriptorSet();
+	void updateDescriptorSet();
+	VkShaderModule createShaderModule(const char* fileName);
 	vector<const char*>errors;
 };

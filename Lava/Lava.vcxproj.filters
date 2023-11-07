@@ -16,6 +16,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="add.comp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lava.cpp">
@@ -35,10 +36,10 @@
     <ClInclude Include="lava.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
-    <ClInclude Include="vulkanBase.h">
+    <ClInclude Include="vk_mem_alloc.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
-    <ClInclude Include="vk_mem_alloc.h">
+    <ClInclude Include="vulkanBase.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1,0 +1,12 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 4 ) in; 
+layout(std430, binding = 0) buffer layout1 { 
+	float output_data[];
+};
+layout(constant_id = 3) const float value = 1; 
+void main() {
+	const uint x = gl_GlobalInvocationID.x; const uint y = gl_GlobalInvocationID.y;
+	const uint width = gl_WorkGroupSize.x * gl_NumWorkGroups.x; const uint index = x + y * width;
+	output_data[ index ] += value;
+}
